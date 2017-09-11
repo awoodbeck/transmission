@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"net/http"
 )
@@ -75,6 +76,12 @@ func (c *Client) Do(req *http.Request, retry bool) (*http.Response, error) {
 		req.SetBasicAuth(c.User, c.Password)
 	}
 	if c.sessionID != "" {
+		// Delete the previous session in header in case there was one
+
+		// We need to do this because the previous header won't be overridden
+		// by the "Add", we need to manually delete the previous header or the
+		// request will fail
+		req.Header.Del("X-Transmission-Session-Id")
 		req.Header.Add("X-Transmission-Session-Id", c.sessionID)
 	}
 
@@ -100,7 +107,15 @@ func (c *Client) Do(req *http.Request, retry bool) (*http.Response, error) {
 	// your X-Transmission-Session-Id and to resend the previous request.
 	if resp.StatusCode == http.StatusConflict && retry {
 		c.sessionID = resp.Header.Get("X-Transmission-Session-Id")
+
+		// Copy the previous request body in order to do it again
 		req.Body = ioutil.NopCloser(bytes.NewBuffer(b))
+
+		// We also need to read the body before closing it, or it will trigger
+		// a "net/http: request cancelled" error
+		io.Copy(ioutil.Discard, resp.Body)
+		resp.Body.Close()
+
 		return c.Do(req, false)
 	}
 
@@ -123,7 +138,7 @@ func (c *Client) request(tReq *Request, tResp *Response) error {
 	if err != nil {
 		return err
 	}
-	defer req.Body.Close()
+	defer resp.Body.Close()
 
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
